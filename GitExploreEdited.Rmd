@@ -1,0 +1,226 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+# Parts 1 and 2
+library(tidyverse)
+library(glue)
+library(stringr)
+library(forcats)
+
+# Part 3
+library(tidygraph)
+library(ggraph)
+library(tidytext)
+```
+
+```{r}
+# Remote repository URL
+repo_url <- "https://github.com/tidyverse/ggplot2.git"
+
+# Directory into which git repo will be cloned
+clone_dir <- file.path(tempdir(), "git_repo")
+
+# Create command
+clone_cmd <- glue("git clone {repo_url} {clone_dir}")
+```
+
+```{r}
+# Invoke command
+system(clone_cmd)
+
+system(glue('git -C {clone_dir} log -3'))
+```
+
+```{r}
+log_format_options <- c(datetime = "cd", commit = "h", parents = "p", author = "an", subject = "s")
+option_delim <- "\t"
+log_format   <- glue("%{log_format_options}") %>% glue_collapse(option_delim)
+log_options  <- glue('--pretty=format:"{log_format}" --date=format:"%Y-%m-%d"')
+log_cmd      <- glue('git -C {clone_dir} log {log_options}')
+log_cmd
+```
+
+
+```{r}
+system(glue('{log_cmd} -3'))
+```
+
+```{r}
+history_logs <- system(log_cmd, intern = TRUE) %>% 
+  str_split_fixed(option_delim, length(log_format_options)) %>% 
+  as_tibble() %>% 
+  setNames(names(log_format_options))
+
+history_logs
+```
+
+```{r}
+history_logs <- history_logs %>% 
+  mutate(parents = str_split(parents, " "))
+
+history_logs
+```
+
+```{r}
+# Start with NA
+history_logs <- history_logs %>% mutate(branch = NA_integer_)
+
+# Create a boolean vector to represent free columns (1000 should be plenty!)
+free_col <- rep(TRUE, 1000)
+
+for (i in seq_len(nrow(history_logs) - 1)) { # - 1 to ignore root
+  # Check current branch col and assign open col if NA
+  branch <- history_logs$branch[i]
+
+  if (is.na(branch)) {
+    branch <- which.max(free_col)
+    free_col[branch] <- FALSE
+    history_logs$branch[i] <- branch
+  }
+
+  # Go through parents
+  parents <- history_logs$parents[[i]]
+
+  for (p in parents) {
+    parent_col <- history_logs$branch[history_logs$commit == p]
+
+    # If col is missing, assign it to same branch (if first parent) or new branch (if other)
+    
+    if (is.na(parent_col)) {
+      parent_col <- if_else(p == parents[1], branch, which.max(free_col))
+
+    # If NOT missing this means a split has occurred. Assign parent the lowest
+    # and re-open both cols (parent closed at the end)
+    } else {
+      free_col[c(branch, parent_col)] <- TRUE
+      parent_col <- min(branch, parent_col)
+
+    }
+
+    # Close parent col and assign
+    free_col[parent_col] <- FALSE
+    history_logs$branch[history_logs$commit == p] <- parent_col
+  }
+}
+
+history_logs
+```
+
+## Part 2
+
+```{r}
+history_logs %>% 
+  count(author, sort = TRUE)
+```
+
+```{r}
+history_logs <- history_logs %>% 
+  mutate(author = case_when(
+    str_detect(tolower(author), "hadley") ~ "Hadley Wickham",
+    str_detect(tolower(author), "kohske takahashi") ~ "Kohske Takahashi",
+    TRUE ~ str_to_title(author)
+  ))
+```
+
+```{r}
+history_logs %>% 
+  count(author) %>% 
+  top_n(10, n) %>% 
+  mutate(author = fct_reorder(author, n)) %>% 
+  ggplot(aes(author, n)) +
+    geom_col(aes(fill = n), show.legend = FALSE) +
+    coord_flip() +
+    theme_minimal() +
+    ggtitle("ggplot2 authors with most commits") +
+    labs(x = NULL, y = "Number of commits", caption = "Post by @drsimonj")
+
+```
+
+## Part three
+
+```{r}
+# Convert commit to a factor (for ordering nodes)
+history_logs <- history_logs %>% 
+  mutate(commit = factor(commit)) #You can't order by strings, evidently
+
+history_logs <- history_logs %>% #Trying to get around the x and y as numeric error below
+  mutate(datetime = as.Date(datetime, origin="1970-01-01"))
+ 
+# Nodes are the commits (keeping relevant info)
+nodes <- history_logs %>% 
+  select(-parents) %>% #This removes the parents column from the table
+  arrange(commit) #The table is organized in increasing order of commit (implies a timeline)
+
+# Edges are connections between commits and their parents
+edges <- history_logs %>% 
+  select(commit, parents) %>% #Choose these two columns
+  unnest(parents) %>% #Makes each element on the list its own row. 
+  mutate(parents = factor(parents, levels = levels(commit))) %>% # The factor enables us to order the commits. The levels() describes the order, but not exactly sure how...
+  transmute(from = as.integer(parents), to = as.integer(commit)) %>% #OOOOOOOOH. This transforms the whole thing from parents/commeits into a from/to table. Somehow R remembers the connection between the factor-as-integer and the original
+  drop_na() #Get rid of any null variables
+
+# Create tidy directed graph object
+git_graph <- tbl_graph(nodes = nodes, edges = edges, directed = TRUE)
+
+
+
+
+
+
+```
+
+```{r}
+
+git_graph %>% activate(edges)
+
+```
+
+```{r}
+git_tibble <- as_tibble(git_graph)
+```
+
+```{r}
+git_graph %>% 
+  ggraph() +
+    geom_edge_link(alpha = .1) +
+    geom_node_point(aes(color = factor(branch)), alpha = .3) +
+    theme_graph() +
+    theme(legend.position = "none")
+```
+```{r}
+git_graph %>%
+  activate(nodes) %>%
+  mutate(x = as.integer(datetime), y = branch, edge = as.integer(commit))
+create_layout(git_graph, layout = 'kk')
+
+```
+
+
+```{r}
+# This is the function that reformats the graph and fucks everything
+ggraph_git <- . %>% #Do the function on whatever is called, git_graph in the next blob
+  # Set node x,y coordinates
+  activate(nodes) %>% #We're going to be working on the "node" aspect of the graph
+  mutate(x = as.numeric(datetime), y = branch) %>% #Adding these two entries to the graph - BUT I don't see how it changed the graph
+  # Plot with correct layout
+  head(create_layout(., layout = as_tibble(activate(., nodes))))
+       
+```
+
+```{r}
+# Lambda expressions: 
+ 
+head(create_layout(ggraph_git,kk))
+```
+
+
+
+
+
+```{r}
+git_graph %>% 
+  ggraph_git
+```
+

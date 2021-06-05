@@ -1,0 +1,103 @@
+---
+title: "Creating file directory tibble"
+output: html_notebook
+---
+
+We cloned the git repo into a temporary directory in the previous notebook. Now we are able to perform certain git commands and understand commits etc. But to explore the files we need to create a tibble out of the file directory.
+
+For reasons unclear, I've named the directory of the repo "dendo_dir." Whatever. The value of this variable is the path to the cloned repo.
+
+We use the fs library to create the first tibble of the directory, with path type and size.
+
+```{r}
+mytree <- dir_info(dendo_dir, recurse = TRUE) %>% select(path, type, size) %>% group_by(path)
+```
+
+We can now clean it up by removing all paths that we don't care about.
+
+```{r}
+ mytree <- mytree %>% mutate(path = str_remove(path, "/var/folders/n0/13y4pg1d20l4th9zbqpzjd640000gr/T/Rtmp1i69Wg/"))
+```
+
+We need to split the paths column into different columns so that we can perform visualizations. First let's take a look at how deep the directory tree goes by counting the number of slashes.
+
+```{r}
+
+mytree$paths <- str_count(mytree$path, "/")
+max(mytree$paths)
+
+```
+
+It looks like the tree is only four directories deep at the deepest. So we separate the columns using the slash as a separator.
+
+```{r}
+
+mytree_file <- mytree
+
+```
+
+
+Let's see if there's an easier way to do this, by creating a file and path columns
+```{r}
+
+mytree_file <- mytree_file %>%
+  separate(col = "path", c("path", "file"), "([/]*(?!.*[/]))", extra="merge", fill = 'right')
+
+```
+
+I kind of can't believe that worked. That's a bonkers RegEx, it's a hack that finds the last slash in the path by using a negative lookahead. To be honest, I don't understand why the .* is necessary, but it absolutely won't work without it. 
+
+Anyway, we now have a path and file columns! That's great, except that in some rows the directory is in the wrong place. 
+
+```{r}
+
+mytree_group <- filter(mytree, type == "directory")
+
+```
+
+```{r}
+
+mytree_file <- filter(mytree, type == "file")
+
+```
+
+```{r}
+
+mytree_file$pathString <- mytree_file$path
+
+```
+
+```{r}
+
+mytree_file <- separate(mytree_file, col = "path", c("root", "group", "subgroup", "subsubgroup", "file"), sep = "([/])", fill = "right")
+
+```
+
+```{r}
+
+# Because we'll need a column with the full path (I think), we'll create it here before splitting everyting out
+
+mytree_file$pathString <- mytree_file$path
+
+```
+
+Now we're free to split path
+
+```{r}
+
+mytree_group <- separate(mytree_group, col = "path", c("path", "path1", "path2", "path3"), sep = "([/])", fill = "right")
+
+```
+
+
+And now we have to rearrange the data so that the columns make sense
+
+```{r}
+
+mytree_group2 <- mytree_group %>%
+  select(starts_with("path")) %>%
+  mutate(v=c(v[!is.na(v)], rep(NA, length(v) - length(v[!is.na(v)]))))
+
+```
+
+

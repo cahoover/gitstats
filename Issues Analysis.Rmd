@@ -1,0 +1,64 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(gh)
+library(tidyverse)
+```
+
+
+```{r}
+my_repos <- gh("/users/:username/repos", username = "hadley")
+```
+
+```{r}
+vapply(my_repos, "[[", "", "name")
+```
+
+```{r}
+comments <- gh("/repos/:username/:repo/issues/comments", username = "hadley", repo = "r-internals" )
+```
+
+
+```{r}
+graph <- as_tibble(vapply(comments, "[[", "", "body"))
+```
+
+```{r}
+graph %>%
+  mutate(line = 1:18)
+```
+
+
+
+```{r}
+graph <- rename (graph, text = value)
+```
+
+```{r}
+graph <- graph %>%
+          mutate(line = 1:18)
+```
+
+```{r}
+graph <- graph %>%
+         relocate(line, .before = text)
+```
+
+```{r}
+graph
+```
+
+```{r}
+library(tidytext)
+```
+
+
+```{r}
+graph %>%
+  unnest_tokens(line, text)
+
+```
+

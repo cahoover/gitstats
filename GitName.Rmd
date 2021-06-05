@@ -1,0 +1,248 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+# install.packages("cloc", repos = c("https://cinc.rud.is", "https://cloud.r-project.org/"))
+```
+
+
+```{r}
+
+library(cloc)
+
+cloc("https://raw.githubusercontent.com/tidyverse/dplyr/master/R/group-by.r")
+
+```
+
+
+```{r}
+
+files <- cloc_by_file("~/sites/generalanalytics.io")
+
+```
+
+
+
+```{r}
+
+files
+
+```
+
+
+```{r}
+
+library(dplyr)
+library(textshape)
+library(lexicon)
+library(textclean)
+
+```
+
+```{r}
+#We clean up the filename to get rid of shit
+
+files$filename <- gsub("/Users/aperture/sites/generalanalytics.io/", "", files$filename)
+
+
+```
+
+
+```{r}
+files
+```
+
+
+```{r}
+#The parser below needs a column called pathString
+
+files <- rename(files, pathString = filename)
+
+```
+
+This function creates a dataframe with the path split into various columns  
+
+```{r}
+
+library(data.tree); library(plyr); library(purrr)
+
+```
+
+```{r}
+split <- lapply(strsplit(files$pathString, "/"), function(z) as.data.frame(t(z)))
+```
+
+```{r}
+# This is a super interesting function. It takes the bonkers list from above and creates separate rows for each element
+
+split <- rbind.fill(split)
+```
+
+```{r}
+# We need to create a pathstring as a key to merge the two dataframes together
+
+# The apply function takes arguments: split is the dataframe, 1 is to execute apply over rows (2 would be columns), and then the function we want to apply to each row. The paste() concatenates ("link things together in a chain"), collapse provides the separator, 
+
+split$pathString <- apply(split, 1, function(x) paste(trimws(na.omit(x)), collapse="/"))
+# (mytree <- data.tree::as.Node(x))
+```
+
+```{r}
+#Here we merge the two dataframes together using pathString as a key
+
+merged <- merge(files, split, by = "pathString")
+
+```
+
+## Here we created a nested dataframe, with a nested column of the path variables. This in prep to create a Json
+
+```{r}
+
+library(tidyr)
+library(dplyr)
+library(purrr)
+
+nested <- split %>%
+           nest(path = c(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10))
+
+```
+
+
+## Next we create a json using the as.Node function
+
+```{r}
+library(data.tree)
+
+node <- as.Node(nested)
+
+```
+
+```{r}
+
+print(node, "loc", "language")
+
+```
+
+And we can build the nested circle, something I've been working on for so long
+
+```{r}
+library(circlepackeR) 
+
+circlepackeR(node, size = "loc", color_min = "hsl(56,80%,80%)", color_max = "hsl(341,30%,40%)")
+
+```
+
+
+
+
+```{r}
+library(fs)
+
+filez <- dir_tree(path="~/sites/generalanalytics.io", recurse = TRUE)
+```
+
+
+
+```{r}
+
+filezz <- as_tibble(as.list(filez))
+
+```
+
+```{r}
+filezz
+```
+
+
+
+```{r}
+mytree
+```
+
+
+
+
+```{r}
+# Circlepacker package
+library(circlepackeR)         
+# devtools::install_github("jeromefroe/circlepackeR") # If needed
+```
+# create a nested data frame giving the info of a nested dataset:
+#data <- data.frame(
+#  root=rep("root", 15),
+#  group=c(rep("group A",5), rep("group B",5), rep("group C",5)), 
+#  subgroup= rep(letters[1:5], each=3),
+#  subsubgroup=rep(letters[1:3], 5),
+#  value=sample(seq(1:15), 15)
+#)
+
+```{r}
+# Change the format. This use the data.tree library. This library needs a column that looks like root/group/subgroup/..., so I build it
+
+library(data.tree)
+tree <- as.Node(files)
+
+```
+
+# Make the plot
+#circlepackeR(population, size = "value")
+
+# You can custom the minimum and maximum value of the color range.
+p <- circlepackeR(population, size = "value", color_min = "hsl(56,80%,80%)", color_max = "hsl(341,30%,40%)")
+
+# save the widget
+# library(htmlwidgets)
+# saveWidget(p, file=paste0( getwd(), "/HtmlWidget/circular_packing_circlepackeR2.html"))
+
+
+
+```{r}
+# Circlepacker package
+library(circlepackeR)         
+# devtools::install_github("jeromefroe/circlepackeR") # If needed
+
+# create a nested data frame giving the info of a nested dataset:
+data <- data.frame(
+  root=rep("root", 15),
+  group=c(rep("group A",5), rep("group B",5), rep("group C",5)), 
+  subgroup= rep(letters[1:5], each=3),
+  subsubgroup=rep(letters[1:3], 5),
+  value=sample(seq(1:15), 15)
+)
+
+# Change the format. This use the data.tree library. This library needs a column that looks like root/group/subgroup/..., so I build it
+library(data.tree)
+data$pathString <- paste("world", data$group, data$subgroup, data$subsubgroup, sep = "/")
+population <- as.Node(data)
+
+# Make the plot
+#circlepackeR(population, size = "value")
+
+# You can custom the minimum and maximum value of the color range.
+p <- circlepackeR(population, size = "value", color_min = "hsl(56,80%,80%)", color_max = "hsl(341,30%,40%)")
+
+# save the widget
+# library(htmlwidgets)
+# saveWidget(p, file=paste0( getwd(), "/HtmlWidget/circular_packing_circlepackeR2.html"))
+
+```
+
+```{r}
+filez
+
+```
+
+```{r}
+
+rename(files, pathString = filename)
+
+```
+
+```
+```{r}
+files
+```
+

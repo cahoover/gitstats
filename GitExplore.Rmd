@@ -1,0 +1,286 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Install the library for part 1 and 2
+
+```{r}
+library(tidyverse)
+library(glue)
+library(stringr)
+library(forcats)
+```
+
+
+Let's defgine a git repo
+
+```{r}
+repo_url <- "https://github.com/tidyverse/ggplot2.git"
+```
+
+And where are we going to put this fucker?
+
+```{r}
+clone_dir <- file.path(tempdir(), "git_repo")
+```
+
+Link them
+
+```{r}
+clone_cmd <- glue("git clone {repo_url} {clone_dir}")
+```
+
+```{r}
+system(clone_cmd)
+```
+
+Let's see what we got 
+
+```{r}
+list.files(clone_dir)
+```
+
+Let's fuck around a bit
+
+```{r}
+system(glue('git -C {clone_dir} log -3'))
+```
+
+Let's try that gain, making it pretty
+
+```{r}
+
+log_format_options <- c(datetime = "cd", commit = "h", parents = "p", author = "an", subject = "s")
+option_delim <- "\t"
+log_format   <- glue("%{log_format_options}") %>% glue_collapse(option_delim)
+log_options  <- glue('--pretty=format:"{log_format}" --date=format:"%Y-%m-%d %H:%M"')
+log_cmd      <- glue('git -C {clone_dir} log {log_options}')
+log_cmd
+```
+
+
+```{r}
+system(glue('{log_cmd} -3'))
+```
+
+```{r}
+history_logs <- system(log_cmd, intern = TRUE) %>% 
+  str_split_fixed(option_delim, length(log_format_options)) %>% 
+  as_tibble(.name_repair = ("minimal")) %>% 
+  setNames(names(log_format_options))
+
+history_logs
+```
+
+Check the parents column for space-separated strings, which can happen as the result of a merge. Change the parent column into a list-column of character vectors to handle this 
+
+```{r}
+history_logs <- history_logs %>% 
+  mutate(parents = str_split(parents, " "))
+
+history_logs
+
+```
+
+```{r}
+history_logs <- history_logs %>% 
+  mutate(datetime = as.numeric(datetime))
+
+history_logs
+
+```
+
+
+Now we assign branch numbers to commits
+
+Start with NA
+
+```{r}
+history_logs <- history_logs %>% mutate(branch = NA_integer_)
+```
+
+Finally, be sure to assign branch numbers to commits. There’s surely a better way to do this, but here’s one (very untidy) method:
+
+```{r}
+free_col <- rep(TRUE, 1000)
+
+for (i in seq_len(nrow(history_logs) - 1)) { # - 1 to ignore root
+  # Check current branch col and assign open col if NA
+  branch <- history_logs$branch[i]
+
+  if (is.na(branch)) {
+    branch <- which.max(free_col)
+    free_col[branch] <- FALSE
+    history_logs$branch[i] <- branch
+  }
+
+  # Go through parents
+  parents <- history_logs$parents[[i]]
+
+  for (p in parents) {
+    parent_col <- history_logs$branch[history_logs$commit == p]
+
+    # If col is missing, assign it to same branch (if first parent) or new
+    # branch (if other)
+    if (is.na(parent_col)) {
+      parent_col <- if_else(p == parents[1], branch, which.max(free_col))
+
+    # If NOT missing this means a split has occurred. Assign parent the lowest
+    # and re-open both cols (parent closed at the end)
+    } else {
+      free_col[c(branch, parent_col)] <- TRUE
+      parent_col <- min(branch, parent_col)
+
+    }
+
+    # Close parent col and assign
+    free_col[parent_col] <- FALSE
+    history_logs$branch[history_logs$commit == p] <- parent_col
+  }
+}
+
+history_logs
+
+```
+
+Now that we have the tidy git log, let's do some analysis
+
+```{r}
+history_logs %>% 
+  count(author, sort = TRUE)
+```
+
+```{r}
+history_logs <- history_logs %>% 
+  mutate(author = case_when(
+    str_detect(tolower(author), "hadley") ~ "Hadley Wickham",
+    str_detect(tolower(author), "kohske takahashi") ~ "Kohske Takahashi",
+    TRUE ~ str_to_title(author)
+  ))
+
+```
+
+
+```{r}
+history_logs %>% 
+  count(author) %>% 
+  top_n(10, n) %>% 
+  mutate(author = fct_reorder(author, n)) %>% 
+  ggplot(aes(author, n)) +
+    geom_col(aes(fill = n), show.legend = FALSE) +
+    coord_flip() +
+    theme_minimal() +
+    ggtitle("ggplot2 authors with most commits") +
+    labs(x = NULL, y = "Number of commits", caption = "Post by @drsimonj")
+
+```
+
+Install the library for part 3
+
+```{r}
+# Part 3
+library(tidygraph)
+library(ggraph)
+library(tidytext)
+```
+
+```{r}
+history_logs <- history_logs %>%
+  datetime <- as.numeric(datetime)
+```
+
+```{r}
+# Convert commit to a factor (for ordering nodes)
+history_logs <- history_logs %>% 
+  mutate(commit = factor(commit))
+```
+
+```{r}
+# Nodes are the commits (keeping relevant info)
+nodes <- history_logs %>% 
+  select(-parents) %>% 
+  arrange(commit)
+```
+
+```{r}
+# Edges are connections between commits and their parents
+edges <- history_logs %>% 
+  select(commit, parents) %>% 
+  unnest(parents) %>% 
+  mutate(parents = factor(parents, levels = levels(commit))) %>% 
+  transmute(from = as.integer(parents), to = as.integer(commit)) %>% 
+  drop_na()
+```
+
+```{r}
+# Create tidy directed graph object
+git_graph <- tbl_graph(nodes = nodes, edges = edges, directed = TRUE)
+```
+```{r}
+git_graph
+```
+
+```{r}
+git_graph(datetime)
+```
+
+
+```{r}
+git_graph %>% 
+  ggraph(layout = "nicely") +
+    geom_edge_link(alpha = .1) +
+    geom_node_point(aes(color = factor(branch)), alpha = .3) +
+    theme_graph() +
+    theme(legend.position = "none")
+#> Using `nicely` as default layout
+```
+
+
+```{r}
+ggraph_git <- . %>%
+  datetime <- as.numeric(datetime)
+```
+
+  # Set node x,y coordinates
+  activate(nodes) %>% 
+  mutate(x = datetime, y = branch) %>%
+```
+```{r}
+x
+```
+
+
+```{r}
+git_graph
+```
+
+```{r}
+ggraph_git <- . %>%
+  # Plot with correct layout
+  create_layout(layout = as_tibble(activate(., nodes))) %>% 
+  {ggraph(.) + theme_graph()}
+```
+
+```{r}
+git_graph %>% 
+  activate(nodes) %>% 
+  filter(datetime > "2015-11-01", datetime < "2016-08-01") %>% 
+  ggraph_git() +
+    geom_edge_link(alpha = .1) +
+    geom_node_point(aes(color = factor(branch)), alpha = .3) +
+    theme(legend.position = "none") +
+    ggtitle("Git history of ggplot2",
+            subtitle = "2015-11 to 2016-08")
+```
+
+```{r}
+git_graph %>% 
+  ggraph_git() +
+    geom_edge_link(alpha = .1) +
+    geom_node_point(aes(color = factor(branch)), alpha = .3) +
+    theme(legend.position = "none") +
+    ggtitle("Commit history of ggplot2")
+```
+
+

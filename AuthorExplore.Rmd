@@ -1,0 +1,222 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+require(devtools)
+
+install_version("ggraph", version = "1.0.0", repos = "http://cran.us.r-project.org")
+
+```
+
+
+```{r}
+# Parts 1 and 2
+library(tidyverse)
+library(glue)
+library(stringr)
+library(forcats)
+
+# Part 3
+library(tidygraph)
+library(ggraph)
+library(tidytext)
+```
+
+```{r}
+# Remote repository URL
+repo_url <- "https://github.com/tidyverse/ggplot2.git"
+
+# Directory into which git repo will be cloned
+clone_dir <- file.path(tempdir(), "git_repo")
+
+# Create command
+clone_cmd <- glue("git clone {repo_url} {clone_dir}")
+```
+
+```{r}
+# Invoke command
+system(clone_cmd)
+```
+
+```{r}
+system(glue('git -C {clone_dir} log -3'))
+```
+
+```{r}
+log_format_options <- c(datetime = "cd", commit = "h", parents = "p", author = "an", subject = "s")
+option_delim <- "\t"
+log_format   <- glue("%{log_format_options}") %>% glue_collapse(option_delim)
+log_options  <- glue('--pretty=format:"{log_format}" --date=format:"%Y-%m-%d %H:%M:%S"')
+log_cmd      <- glue('git -C {clone_dir} log {log_options}')
+log_cmd
+```
+
+
+```{r}
+system(glue('{log_cmd} -3'))
+```
+
+```{r}
+history_logs <- system(log_cmd, intern = TRUE) %>% 
+  str_split_fixed(option_delim, length(log_format_options)) %>% 
+  as_tibble() %>% 
+  setNames(names(log_format_options))
+
+history_logs
+```
+
+```{r}
+history_logs <- history_logs %>% 
+  mutate(parents = str_split(parents, " "))
+
+history_logs
+```
+
+```{r}
+# Start with NA
+history_logs <- history_logs %>% mutate(branch = NA_integer_)
+
+```
+
+````{r}
+
+# Create a boolean vector to represent free columns (1000 should be plenty!)
+free_col <- rep(TRUE, 1000)
+```
+
+```{r}
+#seq_len creates a sequence from one to n, with n defined in the argument.
+#nrow counts the number of rows in history_logs (4756).
+#Here we are creating a sequence that's the one short of the number of rows (4755).
+for (i in seq_len(nrow(history_logs) - 1)) { # Cycle through nrow number of times and perform the following function
+  # Check current branch col and assign open col if NA
+  branch <- history_logs$branch[i] #Create a variaible called "branch" and assign it the value in the current row of history_logs
+#note that R uses "L" to denote an integer. So the value of branch at row 1 is "1L"
+  if (is.na(branch)) { #All of the branches are NA at first, see the mutuate function above.
+    branch <- which.max(free_col) #If the branch is NA, then assign the max value in free_col. The first iteration is going to be 1. 
+    free_col[branch] <- FALSE 
+    history_logs$branch[i] <- branch
+  }
+  # Go through parents
+  parents <- history_logs$parents[[i]] #We're going to get the name of a commit here. For row 1 it's c9adeedd
+
+  for (p in parents) { #there might be more than one parent, so we iterate. Most of the time there's only one.
+    parent_col <- history_logs$branch[history_logs$commit == p] #Parent_col is the number of the row where the parent commit lives. 
+
+    # If col is missing, assign it to same branch (if first parent) or new branch (if other)
+    
+    if (is.na(parent_col)) {
+      parent_col <- if_else(p == parents[1], branch, which.max(free_col))
+
+    # If NOT missing this means a split has occurred. Assign parent the lowest
+    # and re-open both cols (parent closed at the end)
+    } else {
+      free_col[c(branch, parent_col)] <- TRUE
+      parent_col <- min(branch, parent_col)
+
+    }
+
+    # Close parent col and assign
+    free_col[parent_col] <- FALSE
+    history_logs$branch[history_logs$commit == p] <- parent_col
+  }
+}
+
+
+history_logs
+```
+
+## Part 2
+
+```{r}
+history_logs %>% 
+  count(author, sort = TRUE)
+```
+
+```{r}
+history_logs <- history_logs %>% 
+  mutate(author = case_when(
+    str_detect(tolower(author), "hadley") ~ "Hadley Wickham",
+    str_detect(tolower(author), "kohske takahashi") ~ "Kohske Takahashi",
+    TRUE ~ str_to_title(author)
+  ))
+```
+
+```{r}
+history_logs %>% 
+  count(author) %>% 
+  top_n(10, n) %>% 
+  mutate(author = fct_reorder(author, n)) %>% 
+  ggplot(aes(author, n)) +
+    geom_col(aes(fill = n), show.legend = FALSE) +
+    coord_flip() +
+    theme_minimal() +
+    ggtitle("ggplot2 authors with most commits") +
+    labs(x = NULL, y = "Number of commits", caption = "Post by @drsimonj")
+
+```
+
+
+
+## Part three
+
+```{r}
+# Convert commit to a factor (for ordering nodes)
+history_logs <- history_logs %>% 
+  mutate(commit = factor(commit))
+
+# Nodes are the commits (keeping relevant info)
+nodes <- history_logs %>% 
+  select(-parents) %>% 
+  arrange(commit)
+
+# Edges are connections between commits and their parents
+edges <- history_logs %>% 
+  select(commit, parents) %>% 
+  unnest(parents) %>% 
+  mutate(parents = factor(parents, levels = levels(commit))) %>% 
+  transmute(from = as.integer(parents), to = as.integer(commit)) %>% 
+  drop_na()
+
+# Create tidy directed graph object
+git_graph <- tbl_graph(nodes = nodes, edges = edges, directed = TRUE)
+
+git_graph
+```
+
+```{r}
+git_graph %>% 
+  ggraph(layout="nicely") +
+    geom_edge_link(alpha = .1) +
+    geom_node_point(aes(color = factor(branch)), alpha = .3) +
+    theme_graph() +
+    theme(legend.position = "none")
+```
+```{r}
+ggraph_git <- . %>%
+  # Set node x,y coordinates
+  activate(nodes) %>% 
+  mutate(x = datetime, y = branch) %>% 
+  # Plot with correct layout
+  create_layout(layout = "manual", node.positions = as_tibble(activate(., nodes))) %>% 
+  {ggraph(., layout = "manual") + theme_graph() + labs(caption = "Post by @drsimonj")}
+```
+
+
+
+```{r}
+git_graph %>% 
+  ggraph_git() +
+    geom_edge_link(alpha = .1) +
+    geom_node_point(aes(color = factor(branch)), alpha = .3) +
+    theme(legend.position = "none") +
+    ggtitle("Commit history of ggplot2")
+```
+
+```{r}
+
+history_logs[
+  history_logs$parents == "320cf274"]
+
+```
